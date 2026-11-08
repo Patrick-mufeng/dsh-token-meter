@@ -46,6 +46,7 @@ window.__ModuleLoader__.load({
       'kpi.savedTimes': '倍',
       'kpi.unpriced': '次无价格',
       'kpi.avgCost': '均摊',
+      'kpi.noCalls': '这段时间没有调用',
       'kpi.sessions': '个会话',
       'kpi.sessionsUnit': '会话',
       'kpi.subagents': '子代理',
@@ -64,6 +65,10 @@ window.__ModuleLoader__.load({
       'chart.share': '占比',
       'chart.shareOfDay': '当天用量占比',
       'chart.empty': '这段时间没有调用。',
+      'chart.hourlyTitle': '今日分时花费',
+      'chart.hourlyTitleTokens': '今日分时 Tokens',
+      'chart.hourlySub': '按小时 · 高峰 / 空闲拆分',
+      'chart.hourlyAvg': '时均',
       'chart.peak': '高峰',
       'chart.off': '空闲',
       'rhythm.title': '使用节奏',
@@ -83,9 +88,31 @@ window.__ModuleLoader__.load({
       'model.sub': '按天 · 跟随顶部区间 · 点图例可隐藏曲线',
       'model.total': '合计',
       'model.pick': '模型',
+      'perf.title': '运行性能',
+      'perf.sub': '按每次模型往返统计',
+      'perf.latency': '平均延迟',
+      'perf.latencyDetail': '最慢',
+      'perf.tps': '输出速度',
+      'perf.tpsDetail': 'tokens / 秒',
+      'perf.reasoning': '推理 token 占比',
+      'perf.tokens': 'tokens',
+      'perf.interrupted': '中断调用',
+      'perf.ofCalls': '占全部调用',
+      'perf.samples': '可测样本',
+      'perf.noTiming': '日志里没有 step 起始时间，无法测量延迟。',
+      'tools.title': '工具使用',
+      'tools.sub': '调用次数 / 平均耗时 / 出错率',
+      'tools.calls': '次调用',
+      'tools.avgDuration': '平均耗时',
+      'tools.errorRate': '出错率',
+      'tools.coverage': '含工具调用的请求占比',
+      'tools.empty': '这段时间没有工具调用。',
       'model.all': '全选',
       'model.none': '只看一个',
       'rank.share': '花费占比',
+      'rank.other': '其他',
+      'rank.models': '模型数',
+      'rank.totalCost': '总花费',
       'rank.key': '标识',
       'rhythm.scale': '单格最大',
       'rank.title': '花费排行',
@@ -149,6 +176,7 @@ window.__ModuleLoader__.load({
       'kpi.savedTimes': '×',
       'kpi.unpriced': 'unpriced calls',
       'kpi.avgCost': 'avg',
+      'kpi.noCalls': 'No calls in this range',
       'kpi.sessions': 'sessions',
       'kpi.sessionsUnit': 'sessions',
       'kpi.subagents': 'subagent',
@@ -167,6 +195,10 @@ window.__ModuleLoader__.load({
       'chart.share': 'Share',
       'chart.shareOfDay': 'share of the day',
       'chart.empty': 'No calls in this range.',
+      'chart.hourlyTitle': 'Today by hour',
+      'chart.hourlyTitleTokens': 'Today by hour',
+      'chart.hourlySub': 'hourly · peak / off-peak split',
+      'chart.hourlyAvg': 'Hourly average',
       'chart.peak': 'Peak',
       'chart.off': 'Off-peak',
       'rhythm.title': 'Usage rhythm',
@@ -186,9 +218,31 @@ window.__ModuleLoader__.load({
       'model.sub': 'per day · follows the range above · click a legend entry to hide its line',
       'model.total': 'Total',
       'model.pick': 'Models',
+      'perf.title': 'Runtime performance',
+      'perf.sub': 'per model round-trip',
+      'perf.latency': 'Average latency',
+      'perf.latencyDetail': 'slowest',
+      'perf.tps': 'Output speed',
+      'perf.tpsDetail': 'tokens / second',
+      'perf.reasoning': 'Reasoning share',
+      'perf.tokens': 'tokens',
+      'perf.interrupted': 'Interrupted calls',
+      'perf.ofCalls': 'of all calls',
+      'perf.samples': 'Measured samples',
+      'perf.noTiming': 'The log has no step start times, so latency cannot be measured.',
+      'tools.title': 'Tool usage',
+      'tools.sub': 'calls / average duration / error rate',
+      'tools.calls': 'calls',
+      'tools.avgDuration': 'average',
+      'tools.errorRate': 'error rate',
+      'tools.coverage': 'Requests that used a tool',
+      'tools.empty': 'No tool calls in this range.',
       'model.all': 'Select all',
       'model.none': 'Reset to one',
       'rank.share': 'share of cost',
+      'rank.other': 'Other',
+      'rank.models': 'models',
+      'rank.totalCost': 'total',
       'rank.key': 'key',
       'rhythm.scale': 'Busiest cell',
       'rank.title': 'Cost ranking',
@@ -552,8 +606,28 @@ window.__ModuleLoader__.load({
      * the expensive band is visible at a glance; token mode stacks input, cache
      * and output. The y axis is labelled, and the daily average is drawn in.
      */
-    function TrendChart({ days, metric, t, tip }) {
-      const series = seriesOf(Array.isArray(days) ? days : []);
+    /**
+     * Trend chart. Normally one bar per calendar day; when the range covers a
+     * single day there is only one bar to draw, so the axis switches to hours of
+     * that day — otherwise the card would be a single lonely column.
+     */
+    function TrendChart({ days, hours, metric, t, tip }) {
+      const daySeries = seriesOf(Array.isArray(days) ? days : []);
+      const hourly = daySeries.length === 1 && Array.isArray(hours) && hours.length > 0;
+      const series = hourly
+        ? hours.map((row) => ({
+            date: pad2(row.hour) + ':00',
+            input: row.input,
+            output: row.output,
+            cacheRead: row.cacheRead,
+            cacheWrite: row.cacheWrite,
+            cost: row.cost,
+            peakCost: row.peakCost,
+            offCost: row.offCost,
+            calls: row.calls,
+            tokenTotal: row.tokenTotal,
+          }))
+        : daySeries;
       if (series.length === 0) return h('div', { className: 'dstm-empty' }, t('chart.empty'));
 
       const cost = metric === 'cost';
@@ -609,7 +683,11 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dstm-chartMeta' },
-          h('span', { className: 'dstm-avg' }, t('chart.avg') + ' ' + fmt(average) + ' · ' + t('chart.total') + ' ' + fmt(sum)),
+          h(
+            'span',
+            { className: 'dstm-avg' },
+            (hourly ? t('chart.hourlyAvg') : t('chart.avg')) + ' ' + fmt(average) + ' · ' + t('chart.total') + ' ' + fmt(sum),
+          ),
           h(Legend, {
             items: cost
               ? [
@@ -653,7 +731,7 @@ window.__ModuleLoader__.load({
                       h(
                         React.Fragment,
                         null,
-                        h(TipTitle, null, row.date),
+                        h(TipTitle, null, hourly ? daySeries[0].date + ' ' + row.date : row.date),
                         h(TipRow, { label: t('chart.cost'), value: formatCny(row.cost), color: 'var(--dstm-peak)', strong: true }),
                         h(TipRow, { label: t('chart.peak'), value: formatCny(row.peakCost === undefined ? 0 : row.peakCost), color: 'var(--dstm-peak)' }),
                         h(TipRow, { label: t('chart.off'), value: formatCny(row.offCost === undefined ? 0 : row.offCost), color: 'var(--dstm-off)' }),
@@ -700,7 +778,7 @@ window.__ModuleLoader__.load({
                   (labelIndexes.has(index) ? ' is-shown' : '') +
                   (index === 0 ? ' is-first' : index === series.length - 1 ? ' is-last' : ''),
               },
-              labelIndexes.has(index) ? (row.date.length === 7 ? row.date : row.date.slice(5)) : '',
+              labelIndexes.has(index) ? (hourly || row.date.length === 7 ? row.date : row.date.slice(5)) : '',
             ),
           ),
         ),
@@ -873,18 +951,22 @@ window.__ModuleLoader__.load({
       // A model that was not used on a day has no point there; breaking the line
       // avoids a misleading dive to zero (and back).
       /**
-       * Smooth path through the non-zero runs of one series.
+       * Smooth path through one series.
        *
        * Uses monotone cubic interpolation (Fritsch–Carlson): the curve passes
-       * through every real data point and never overshoots between them, so a
-       * quiet day cannot be smoothed into a peak that never happened. Zero days
-       * break the run instead of dragging the line to the baseline.
+       * through every data point and never overshoots between them, so a quiet
+       * day cannot be smoothed into a peak that never happened.
+       *
+       * A day with no calls is a real zero and is connected like any other point;
+       * only days outside the plotted window break the line. A gap in the middle
+       * of a series used to look like missing data, which is misleading when the
+       * axis is a calendar.
        */
       const pathOf = (item) => {
         const points = [];
         dates.forEach((date, index) => {
           const value = seriesValueOf(item, index);
-          if (!value) {
+          if (value === null || value === undefined) {
             points.push(null);
             return;
           }
@@ -1083,8 +1165,6 @@ window.__ModuleLoader__.load({
                 return h('path', {
                   key: item.row.key,
                   d: pathOf(item),
-                  className: 'is-drawn',
-                  pathLength: 1,
                   fill: 'none',
                   stroke: palette[item.index % palette.length],
                   strokeWidth: 1.9,
@@ -1223,61 +1303,275 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** Ranking: one row per model / provider / session / directory, by cost. */
-    function RankList({ rows, nameOf, titleOf, totalCost, empty, t, tip }) {
-      if (!Array.isArray(rows) || rows.length === 0) return h('div', { className: 'dstm-empty' }, empty);
-      const sorted = rows.slice().sort((left, right) => (right.cost || 0) - (left.cost || 0));
-      const top = sorted[0];
-      const max = top.cost > 0 ? top.cost : 1;
+    /** Milliseconds as a compact human figure: 850 ms, 4.9 s, 1m 12s. */
+    function formatMs(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—';
+      if (value < 1000) return Math.round(value) + ' ms';
+      const seconds = value / 1000;
+      if (seconds < 60) return (seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)) + ' s';
+      const minutes = Math.floor(seconds / 60);
+      return minutes + 'm ' + Math.round(seconds % 60) + 's';
+    }
+
+    /**
+     * Runtime performance, in the same shape ZCode records per call: how long a
+     * model round-trip takes, how fast it produces tokens, and how much of the
+     * output is reasoning rather than answer.
+     */
+    function PerformancePanel({ performance, t }) {
+      const p = performance || {};
+      const tools = p.tools || {};
+      const rows = [
+        {
+          label: t('perf.latency'),
+          value: formatMs(p.latencyAvgMs),
+          detail: t('perf.latencyDetail') + ' ' + formatMs(p.latencyMaxMs),
+          color: 'var(--dstm-accent)',
+          ratio: p.latencyMaxMs > 0 ? (p.latencyAvgMs || 0) / p.latencyMaxMs : 0,
+        },
+        {
+          label: t('perf.tps'),
+          value: typeof p.tokensPerSecondAvg === 'number' ? p.tokensPerSecondAvg.toFixed(1) : '—',
+          detail: t('perf.tpsDetail'),
+          color: 'var(--dstm-accent)',
+          ratio: typeof p.tokensPerSecondAvg === 'number' ? Math.min(1, p.tokensPerSecondAvg / 200) : 0,
+        },
+        {
+          label: t('perf.reasoning'),
+          value: ((p.reasoningShare || 0) * 100).toFixed(1) + '%',
+          detail: formatTokens(p.reasoningTokens || 0) + ' ' + t('perf.tokens'),
+          color: 'var(--dstm-accent)',
+          ratio: Math.min(1, p.reasoningShare || 0),
+        },
+        {
+          label: t('perf.interrupted'),
+          value: formatInt(p.interrupted || 0),
+          detail: ((p.interruptedRate || 0) * 100).toFixed(1) + '% ' + t('perf.ofCalls'),
+          color: 'var(--dsw-alias-state-error-primary)',
+          ratio: Math.min(1, (p.interruptedRate || 0) * 10),
+        },
+      ];
       return h(
         'div',
-        { className: 'dstm-rank' },
-        sorted.slice(0, 8).map((row) => {
-          const share = totalCost > 0 ? ((row.cost || 0) / totalCost) * 100 : 0;
-          return h(
+        { className: 'dstm-perf' },
+        rows.map((row) =>
+          h(
             'div',
-            {
-              key: titleOf(row),
-              className: 'dstm-rankRow',
-              onMouseEnter: (event) =>
-                tip.show(
-                  event,
+            { key: row.label, className: 'dstm-perfRow' },
+            h('span', { className: 'dstm-perfLabel' }, row.label),
+            h('span', { className: 'dstm-perfValue' }, row.value),
+            h(
+              'span',
+              { className: 'dstm-perfTrack' },
+              h('i', { style: { width: Math.max(2, Math.min(100, row.ratio * 100)) + '%', background: row.color } }),
+            ),
+            h('span', { className: 'dstm-perfDetail' }, row.detail),
+          ),
+        ),
+        p.latencySamples === 0
+          ? h('p', { className: 'dstm-hint' }, t('perf.noTiming'))
+          : h(
+              'p',
+              { className: 'dstm-hint' },
+              t('perf.samples') + ' ' + formatInt(p.latencySamples) + ' / ' + formatInt(p.calls || 0),
+            ),
+      );
+    }
+
+    /** Tool activity: volume, failure rate and the busiest tools. */
+    function ToolPanel({ performance, t }) {
+      const tools = (performance && performance.tools) || {};
+      const rows = Array.isArray(tools.byName) ? tools.byName : [];
+      const max = rows.length > 0 ? rows[0].calls : 1;
+      return h(
+        'div',
+        { className: 'dstm-tools' },
+        h(
+          'div',
+          { className: 'dstm-toolSummary' },
+          h(
+            'div',
+            null,
+            h('b', { className: 'dstm-toolBig' }, formatInt(tools.calls || 0)),
+            h('span', { className: 'dstm-toolUnit' }, t('tools.calls')),
+          ),
+          h(
+            'div',
+            null,
+            h('b', { className: 'dstm-toolBig' }, formatMs(tools.avgMs)),
+            h('span', { className: 'dstm-toolUnit' }, t('tools.avgDuration')),
+          ),
+          h(
+            'div',
+            null,
+            h(
+              'b',
+              { className: 'dstm-toolBig' + ((tools.errorRate || 0) > 0.05 ? ' is-bad' : '') },
+              ((tools.errorRate || 0) * 100).toFixed(1) + '%',
+            ),
+            h('span', { className: 'dstm-toolUnit' }, t('tools.errorRate')),
+          ),
+        ),
+        rows.length === 0
+          ? h('div', { className: 'dstm-empty' }, t('tools.empty'))
+          : h(
+              'div',
+              { className: 'dstm-toolList' },
+              rows.slice(0, 8).map((row) =>
+                h(
+                  'div',
+                  { key: row.name, className: 'dstm-toolRow' },
+                  h('span', { className: 'dstm-toolName' }, row.name),
+                  h('span', { className: 'dstm-toolCount' }, formatInt(row.calls)),
                   h(
-                    React.Fragment,
-                    null,
-                    h(TipTitle, null, nameOf(row)),
-                    h(TipRow, { label: t('col.cost'), value: formatCny(row.cost || 0), color: 'var(--dstm-peak)', strong: true }),
-                    h(TipRow, { label: t('rank.share'), value: share.toFixed(1) + '%', muted: true }),
-                    h(TipRule),
-                    h(TipRow, { label: t('kpi.calls'), value: formatInt(row.calls || 0) }),
-                    row.tokenTotal === undefined ? null : h(TipRow, { label: t('col.total'), value: formatTokens(row.tokenTotal) }),
-                    row.key === undefined ? null : h(TipRow, { label: t('rank.key'), value: titleOf(row), muted: true }),
+                    'span',
+                    { className: 'dstm-toolTrack' },
+                    h('i', { style: { width: Math.max(2, (row.calls / max) * 100) + '%' } }),
                   ),
                 ),
-              onMouseMove: (event) => tip.show(event, undefined),
-              onMouseLeave: tip.hide,
-            },
-            h(
-              'div',
-              { className: 'dstm-rankLine' },
-              h('span', { className: 'dstm-rankName' }, nameOf(row)),
-              h(
-                'span',
-                { className: 'dstm-rankValue' },
-                formatCny(row.cost || 0),
-                h('span', { className: 'dstm-rankShare' }, share.toFixed(1) + '%'),
               ),
             ),
+        h(
+          'p',
+          { className: 'dstm-hint' },
+          t('tools.coverage') + ' ' + ((tools.callsWithToolsRate || 0) * 100).toFixed(0) + '%',
+        ),
+      );
+    }
+
+    /**
+     * Cost share as a donut, with the ranking beside it.
+     *
+     * A pie answers "how concentrated is the bill" at a glance, which the list
+     * could not: one slice covering two thirds of the ring is immediate. Slices
+     * past the top few are folded into an "other" wedge so the legend stays legible.
+     */
+    function RankDonut({ rows, nameOf, titleOf, totalCost, empty, t, tip }) {
+      if (!Array.isArray(rows) || rows.length === 0) return h('div', { className: 'dstm-empty' }, empty);
+      const sorted = rows
+        .filter((row) => (row.cost || 0) > 0)
+        .sort((left, right) => (right.cost || 0) - (left.cost || 0));
+      if (sorted.length === 0) return h('div', { className: 'dstm-empty' }, empty);
+
+      const palette = [
+        'var(--dstm-line-1)',
+        'var(--dstm-line-2)',
+        'var(--dstm-line-3)',
+        'var(--dstm-line-4)',
+        'var(--dstm-line-5)',
+        'var(--dstm-line-6)',
+        'var(--dstm-line-7)',
+        'var(--dstm-line-8)',
+      ];
+
+      // Slices below one percent are a sliver of a sliver; folding them into the
+      // "other" wedge keeps the legend readable without hiding any cost.
+      const totalAll = sorted.reduce((sum, row) => sum + (row.cost || 0), 0) || 1;
+      const keep = sorted.filter((row, index) => index < 6 && (row.cost || 0) / totalAll >= 0.01);
+      const visible = keep.length > 0 ? keep : sorted.slice(0, 1);
+      const kept = new Set(visible.map((row) => titleOf(row)));
+      const rest = sorted.filter((row) => !kept.has(titleOf(row)));
+      const restCost = rest.reduce((sum, row) => sum + (row.cost || 0), 0);
+      const slices = visible.map((row, index) => ({
+        key: titleOf(row),
+        label: nameOf(row),
+        value: row.cost || 0,
+        color: palette[index % palette.length],
+        row,
+      }));
+      if (restCost > 0) {
+        slices.push({ key: '__other', label: t('rank.other'), value: restCost, color: palette[7], row: null, count: rest.length });
+      }
+
+      const total = slices.reduce((sum, slice) => sum + slice.value, 0) || 1;
+
+      // Donut geometry: r=15.9155 makes the circumference exactly 100, so each
+      // slice's dash length is its percentage — no trigonometry needed.
+      const radius = 15.9155;
+      const circumference = 100;
+      let offset = 25; // start at twelve o'clock
+      const circles = slices.map((slice) => {
+        const share = (slice.value / total) * 100;
+        const circle = h('circle', {
+          key: slice.key,
+          cx: 21,
+          cy: 21,
+          r: radius,
+          fill: 'none',
+          stroke: slice.color,
+          strokeWidth: 7,
+          strokeDasharray: share + ' ' + (circumference - share),
+          strokeDashoffset: offset,
+          onMouseEnter: (event) =>
+            tip.show(
+              event,
+              h(
+                React.Fragment,
+                null,
+                h(TipTitle, null, slice.label),
+                h(TipRow, { label: t('col.cost'), value: formatCny(slice.value), color: slice.color, strong: true }),
+                h(TipRow, { label: t('rank.share'), value: share.toFixed(1) + '%', muted: true }),
+                slice.row === null
+                  ? h(TipRow, { label: t('rank.models'), value: formatInt(slice.count), muted: true })
+                  : h(TipRow, { label: t('kpi.calls'), value: formatInt(slice.row.calls || 0), muted: true }),
+              ),
+            ),
+          onMouseMove: (event) => tip.show(event, undefined),
+          onMouseLeave: tip.hide,
+        });
+        offset -= share;
+        return circle;
+      });
+
+      return h(
+        'div',
+        { className: 'dstm-donut' },
+        h(
+          'div',
+          { className: 'dstm-donutPlot' },
+          h(
+            'svg',
+            { viewBox: '0 0 42 42', className: 'dstm-donutSvg', role: 'img' },
+            h('circle', { cx: 21, cy: 21, r: radius, fill: 'none', stroke: 'var(--dsw-alias-bg-layer-2)', strokeWidth: 7 }),
+            circles,
+          ),
+          h(
+            'div',
+            { className: 'dstm-donutCenter' },
+            h('b', null, formatCny(totalCost > 0 ? totalCost : total)),
+            h('span', null, t('rank.totalCost')),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'dstm-donutLegend' },
+          slices.map((slice) =>
             h(
               'div',
-              { className: 'dstm-rankTrack' },
-              h('i', {
-                className: 'dstm-rankFill',
-                style: { width: Math.max(1, ((row.cost || 0) / max) * 100) + '%' },
-              }),
+              {
+                key: slice.key,
+                className: 'dstm-donutRow',
+                onMouseEnter: (event) =>
+                  tip.show(
+                    event,
+                    h(
+                      React.Fragment,
+                      null,
+                      h(TipTitle, null, slice.label),
+                      h(TipRow, { label: t('col.cost'), value: formatCny(slice.value), color: slice.color, strong: true }),
+                      h(TipRow, { label: t('rank.share'), value: ((slice.value / total) * 100).toFixed(1) + '%', muted: true }),
+                    ),
+                  ),
+                onMouseMove: (event) => tip.show(event, undefined),
+                onMouseLeave: tip.hide,
+              },
+              h('i', { className: 'dstm-donutSwatch', style: { background: slice.color } }),
+              h('span', { className: 'dstm-donutName', title: slice.label }, slice.label),
+              h('span', { className: 'dstm-donutShare' }, ((slice.value / total) * 100).toFixed(1) + '%'),
+              h('span', { className: 'dstm-donutValue' }, formatCny(slice.value)),
             ),
-          );
-        }),
+          ),
+        ),
       );
     }
 
@@ -1373,14 +1667,16 @@ window.__ModuleLoader__.load({
         --dstm-cache: color-mix(in oklab, var(--dsw-static-blue-500) 40%, var(--dsw-alias-bg-layer-2));
         --dstm-output: var(--dsw-static-amber-500);
         --dstm-accent: var(--dsw-static-blue-500);
-        --dstm-line-1: var(--dsw-static-blue-500);
-        --dstm-line-2: var(--dsw-static-amber-500);
-        --dstm-line-3: var(--dsw-static-green-500);
-        --dstm-line-4: color-mix(in oklab, var(--dsw-static-blue-500) 55%, var(--dsw-alias-label-primary));
-        --dstm-line-5: color-mix(in oklab, var(--dsw-static-amber-500) 55%, var(--dsw-alias-label-primary));
-        --dstm-line-6: color-mix(in oklab, var(--dsw-static-green-500) 55%, var(--dsw-alias-label-secondary));
-        --dstm-line-7: color-mix(in oklab, var(--dsw-static-blue-500) 40%, var(--dsw-static-green-500));
-        --dstm-line-8: color-mix(in oklab, var(--dsw-static-amber-500) 45%, var(--dsw-static-blue-500));
+        /* Eight categorical hues. Chosen so neighbouring entries stay apart in
+           both themes: alternating warm/cool avoids two blues reading as one. */
+        --dstm-line-1: #3b82f6;
+        --dstm-line-2: #f59e0b;
+        --dstm-line-3: #22c55e;
+        --dstm-line-4: #a855f7;
+        --dstm-line-5: #ef4444;
+        --dstm-line-6: #06b6d4;
+        --dstm-line-7: #84cc16;
+        --dstm-line-8: #ec4899;
       }
       .dstm-inner { box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 26px 40px; display: flex; flex-direction: column; gap: 14px; }
 
@@ -1393,7 +1689,7 @@ window.__ModuleLoader__.load({
       }
       .dstm-stickyInner {
         box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto;
-        padding: calc(14px + var(--dsh-frame-top-clearance, 0px)) 26px 12px max(26px, var(--dsh-frame-leading-clearance, 0px));
+        padding: calc(24px + var(--dsh-frame-top-clearance, 0px)) 26px 14px max(26px, var(--dsh-frame-leading-clearance, 0px));
         display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
       }
       .dstm-headText { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -1440,6 +1736,7 @@ window.__ModuleLoader__.load({
       .dstm-dot-off { background: var(--dstm-off); }
 
       .dstm-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+      .dstm-splitEven { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
       .dstm-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
       .dstm-card { box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); min-width: 0; display: flex; flex-direction: column; }
@@ -1497,6 +1794,23 @@ window.__ModuleLoader__.load({
       .dstm-rhythmScale { display: inline-flex; align-items: center; gap: 4px; }
       .dstm-rhythmScaleLabel { margin-right: 2px; }
       .dstm-rhythmScale .dstm-rhythmCell { width: 10px; height: 10px; border-radius: 2px; }
+
+      /* cost donut */
+      .dstm-donut { display: flex; flex-direction: column; gap: 14px; }
+      .dstm-donutPlot { position: relative; width: 100%; max-width: 172px; aspect-ratio: 1; margin: 0 auto; flex: none; }
+      .dstm-donutSvg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); }
+      .dstm-donutSvg circle { transition: opacity .12s ease; }
+      .dstm-donutSvg circle:hover { opacity: .82; }
+      .dstm-donutCenter { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; pointer-events: none; }
+      .dstm-donutCenter b { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+      .dstm-donutCenter span { font-size: 9.5px; color: var(--dsw-alias-label-secondary); }
+      .dstm-donutLegend { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .dstm-donutRow { display: grid; grid-template-columns: 8px minmax(0, 1fr) 40px 56px; align-items: center; gap: 8px; padding: 3px 4px; font-size: 11.5px; border-radius: 4px; cursor: default; }
+      .dstm-donutRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+      .dstm-donutSwatch { width: 8px; height: 8px; border-radius: 2px; }
+      .dstm-donutName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dstm-donutShare { font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); font-size: 10.5px; text-align: right; }
+      .dstm-donutValue { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 
       .dstm-rank { display: flex; flex-direction: column; }
       .dstm-rankRow { padding: 7px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
@@ -1635,12 +1949,30 @@ window.__ModuleLoader__.load({
       .dstm-lineDot { transition: left .1s ease-out, top .1s ease-out; }
       .dstm-lineSvg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
       .dstm-lineSvg path { transition: opacity .18s ease; }
-      /* Draw the curve once when it mounts. pathLength="1" on the element
-         normalises the dash maths, so this works for any curve length. */
-      .dstm-lineSvg path.is-drawn { stroke-dasharray: 1; stroke-dashoffset: 1; animation: dstm-draw .55s cubic-bezier(.33,.8,.4,1) forwards; }
-      @keyframes dstm-draw { to { stroke-dashoffset: 0; } }
       .dstm-lineCursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--dsw-alias-border-l3); pointer-events: none; }
       .dstm-lineDot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); pointer-events: none; }
+
+      /* runtime performance */
+      .dstm-perf { display: flex; flex-direction: column; gap: 11px; }
+      .dstm-perfRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 1px 10px; align-items: baseline; }
+      .dstm-perfLabel { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+      .dstm-perfValue { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+      .dstm-perfTrack { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; }
+      .dstm-perfTrack i { display: block; height: 100%; border-radius: 2px; }
+      .dstm-perfDetail { grid-column: 1 / -1; font-size: 10.5px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+
+      /* tool usage */
+      .dstm-tools { display: flex; flex-direction: column; gap: 12px; }
+      .dstm-toolSummary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .dstm-toolBig { display: block; font-size: 17px; line-height: 1.2; font-weight: 650; font-variant-numeric: tabular-nums; }
+      .dstm-toolBig.is-bad { color: var(--dsw-alias-state-error-primary); }
+      .dstm-toolUnit { display: block; font-size: 10px; color: var(--dsw-alias-label-secondary); }
+      .dstm-toolList { display: flex; flex-direction: column; gap: 6px; }
+      .dstm-toolRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 10px; align-items: center; }
+      .dstm-toolName { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--dsw-font-family); }
+      .dstm-toolCount { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .dstm-toolTrack { grid-column: 1 / -1; height: 2px; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; margin-top: -2px; }
+      .dstm-toolTrack i { display: block; height: 100%; border-radius: 2px; background: color-mix(in oklab, var(--dstm-accent) 70%, var(--dsw-alias-bg-layer-2)); }
 
       .dstm-footer { display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
       .dstm-note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
@@ -1667,7 +1999,6 @@ window.__ModuleLoader__.load({
       @media (prefers-reduced-motion: reduce) {
         .dstm-statusDot.is-busy, .dstm-skelKpi, .dstm-skelCard { animation: none; }
         .dstm-barStack { transition: none; }
-        .dstm-lineSvg path.is-drawn { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; }
         .dstm-lineCursor, .dstm-lineDot, .dstm-lineSvg path { transition: none; }
       }
     `;
@@ -1726,6 +2057,8 @@ window.__ModuleLoader__.load({
       const rankTitle = (row) => (rankTab === 'session' ? row.key : rankTab === 'workspace' ? row.cwd : row.key);
       const totalCost = data === null ? 0 : data.totals.cost;
 
+      // A range that resolves to one calendar day gets an hourly axis.
+      const singleDay = data !== null && Array.isArray(data.days) && data.days.length === 1;
       const totals = data === null ? null : data.totals;
       const tokenTotal = totals === null ? 0 : totals.tokenTotal;
       const share = (value) => (tokenTotal > 0 ? (value / tokenTotal) * 100 : 0);
@@ -1817,8 +2150,12 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { className: 'dstm-kpiDetail' },
-                    h('b', null, t('kpi.saved') + ' ' + formatCny(totals.saved)),
-                    ' · ' + trim(totals.cost > 0 ? totals.saved / totals.cost : 0) + ' ' + t('kpi.savedTimes'),
+                    totals.saved > 0
+                      ? h(React.Fragment, null,
+                          h('b', null, t('kpi.saved') + ' ' + formatCny(totals.saved)),
+                          totals.cost > 0 ? ' · ' + trim(totals.saved / totals.cost) + ' ' + t('kpi.savedTimes') : '',
+                        )
+                      : h('span', null, t('kpi.noCalls')),
                     totals.unpriced > 0 ? ' · ' + formatInt(totals.unpriced) + ' ' + t('kpi.unpriced') : '',
                   ),
                 ),
@@ -1879,8 +2216,12 @@ window.__ModuleLoader__.load({
                   h(
                     Card,
                     {
-                      title: metric === 'cost' ? t('chart.title') : t('chart.titleTokens'),
-                      subtitle: metric === 'cost' ? t('chart.sub') : t('chart.subTokens'),
+                      title: singleDay
+                        ? (metric === 'cost' ? t('chart.hourlyTitle') : t('chart.hourlyTitleTokens'))
+                        : (metric === 'cost' ? t('chart.title') : t('chart.titleTokens')),
+                      subtitle: singleDay
+                        ? t('chart.hourlySub')
+                        : (metric === 'cost' ? t('chart.sub') : t('chart.subTokens')),
                       actions: h(Segmented, {
                         value: metric,
                         onChange: setMetric,
@@ -1892,7 +2233,7 @@ window.__ModuleLoader__.load({
                         ],
                       }),
                     },
-                    h(TrendChart, { days: data.days, metric, t, tip }),
+                    h(TrendChart, { days: data.days, hours: data.hours, metric, t, tip }),
                   ),
                   h(Card, { title: t('rhythm.title'), subtitle: t('rhythm.sub') }, h(RhythmGrid, { rhythm: data.rhythm, t, tip })),
                 ),
@@ -1916,7 +2257,7 @@ window.__ModuleLoader__.load({
                         ],
                       }),
                     },
-                    h(RankList, {
+                    h(RankDonut, {
                       rows: rankRows,
                       nameOf: rankName,
                       titleOf: rankTitle,
@@ -1931,10 +2272,28 @@ window.__ModuleLoader__.load({
                     { title: t('peaks.title'), subtitle: t('peaks.sub') },
                     h(PeakSplit, { peaks: data.peaks, totals, t, tip }),
                   ),
+
                 ),
               )
             : null,
 
+
+          data !== null
+            ? h(
+                'div',
+                { className: 'dstm-split dstm-splitEven' },
+                h(
+                  Card,
+                  { title: t('perf.title'), subtitle: t('perf.sub') },
+                  h(PerformancePanel, { performance: data.performance, t }),
+                ),
+                h(
+                  Card,
+                  { title: t('tools.title'), subtitle: t('tools.sub') },
+                  h(ToolPanel, { performance: data.performance, t }),
+                ),
+              )
+            : null,
 
           data !== null
             ? h(
