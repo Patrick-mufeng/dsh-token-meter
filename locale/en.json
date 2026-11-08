@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Token Usage",
-    "description": "A whole-DSH token console behind a left-sidebar entry: cost with peak/off-peak split, token composition, cache hit rate, daily trend, weekday-hour rhythm, cost rankings, and a searchable, filterable request ledger."
+    "title": "Usage Dashboard",
+    "description": "A whole-DSH usage dashboard behind a left-sidebar entry: cost with peak/off-peak split, token composition, cache hit rate, daily trend, weekday-hour rhythm, cost rankings, and a searchable, filterable request ledger."
   }
 }

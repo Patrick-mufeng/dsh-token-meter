@@ -1,4 +1,4 @@
-# Token 用量 · Token Usage
+# 统计看板 · Usage Dashboard
 
 整个 DSH 的 Token 账本：左侧边栏一个柱状图标，点开是一张分析台。
 

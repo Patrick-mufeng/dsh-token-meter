@@ -22,11 +22,11 @@ window.__ModuleLoader__.load({
     const STATS_PATH = '/api/dsh-token-meter/stats';
 
     const zh = {
-      'meta.title': 'Token 用量',
-      'meta.description': '在左侧边栏打开整个 DSH 的 Token 用量分析台：花费与峰谷拆分、Tokens 构成、缓存命中、按天趋势、使用节奏、花费排行，以及可筛选分页的请求账本。',
-      'panel.label': 'Token 用量',
+      'meta.title': '统计看板',
+      'meta.description': '在左侧边栏打开整个 DSH 的统计看板：花费与峰谷拆分、Tokens 构成、缓存命中、按天趋势、使用节奏、花费排行，以及可筛选分页的请求账本。',
+      'panel.label': '统计看板',
       'loading': '正在读取统计…',
-      'page.title': 'Token 用量',
+      'page.title': '统计看板',
       'page.subtitle': '整个 DSH 的调用账本与花费分析',
       'range.all': '全部',
       'range.today': '今天',
@@ -50,6 +50,9 @@ window.__ModuleLoader__.load({
       'kpi.sessions': '个会话',
       'kpi.sessionsUnit': '会话',
       'kpi.subagents': '子代理',
+      'kpi.speed': '输出速度',
+      'kpi.speedUnit': 'tokens / 秒',
+      'kpi.speedSamples': '可测样本',
       'mix.input': '输入',
       'mix.cache': '缓存读',
       'mix.output': '输出',
@@ -152,11 +155,11 @@ window.__ModuleLoader__.load({
     };
 
     const en = {
-      'meta.title': 'Token Usage',
-      'meta.description': 'A whole-DSH token usage console behind a left-sidebar entry: cost with peak/off-peak split, token composition, cache hit rate, daily trend, usage rhythm, cost rankings, and a filterable request ledger.',
-      'panel.label': 'Token Usage',
+      'meta.title': 'Usage Dashboard',
+      'meta.description': 'A whole-DSH usage dashboard behind a left-sidebar entry: cost with peak/off-peak split, token composition, cache hit rate, daily trend, usage rhythm, cost rankings, and a filterable request ledger.',
+      'panel.label': 'Usage Dashboard',
       'loading': 'Loading statistics…',
-      'page.title': 'Token Usage',
+      'page.title': 'Usage Dashboard',
       'page.subtitle': 'The call ledger and cost profile of this whole DSH',
       'range.all': 'All',
       'range.today': 'Today',
@@ -180,6 +183,9 @@ window.__ModuleLoader__.load({
       'kpi.sessions': 'sessions',
       'kpi.sessionsUnit': 'sessions',
       'kpi.subagents': 'subagent',
+      'kpi.speed': 'Output speed',
+      'kpi.speedUnit': 'tokens / second',
+      'kpi.speedSamples': 'measured samples',
       'mix.input': 'Input',
       'mix.cache': 'Cache read',
       'mix.output': 'Output',
@@ -1303,142 +1309,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** Milliseconds as a compact human figure: 850 ms, 4.9 s, 1m 12s. */
-    function formatMs(value) {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—';
-      if (value < 1000) return Math.round(value) + ' ms';
-      const seconds = value / 1000;
-      if (seconds < 60) return (seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)) + ' s';
-      const minutes = Math.floor(seconds / 60);
-      return minutes + 'm ' + Math.round(seconds % 60) + 's';
-    }
-
-    /**
-     * Runtime performance, in the same shape ZCode records per call: how long a
-     * model round-trip takes, how fast it produces tokens, and how much of the
-     * output is reasoning rather than answer.
-     */
-    function PerformancePanel({ performance, t }) {
-      const p = performance || {};
-      const tools = p.tools || {};
-      const rows = [
-        {
-          label: t('perf.latency'),
-          value: formatMs(p.latencyAvgMs),
-          detail: t('perf.latencyDetail') + ' ' + formatMs(p.latencyMaxMs),
-          color: 'var(--dstm-accent)',
-          ratio: p.latencyMaxMs > 0 ? (p.latencyAvgMs || 0) / p.latencyMaxMs : 0,
-        },
-        {
-          label: t('perf.tps'),
-          value: typeof p.tokensPerSecondAvg === 'number' ? p.tokensPerSecondAvg.toFixed(1) : '—',
-          detail: t('perf.tpsDetail'),
-          color: 'var(--dstm-accent)',
-          ratio: typeof p.tokensPerSecondAvg === 'number' ? Math.min(1, p.tokensPerSecondAvg / 200) : 0,
-        },
-        {
-          label: t('perf.reasoning'),
-          value: ((p.reasoningShare || 0) * 100).toFixed(1) + '%',
-          detail: formatTokens(p.reasoningTokens || 0) + ' ' + t('perf.tokens'),
-          color: 'var(--dstm-accent)',
-          ratio: Math.min(1, p.reasoningShare || 0),
-        },
-        {
-          label: t('perf.interrupted'),
-          value: formatInt(p.interrupted || 0),
-          detail: ((p.interruptedRate || 0) * 100).toFixed(1) + '% ' + t('perf.ofCalls'),
-          color: 'var(--dsw-alias-state-error-primary)',
-          ratio: Math.min(1, (p.interruptedRate || 0) * 10),
-        },
-      ];
-      return h(
-        'div',
-        { className: 'dstm-perf' },
-        rows.map((row) =>
-          h(
-            'div',
-            { key: row.label, className: 'dstm-perfRow' },
-            h('span', { className: 'dstm-perfLabel' }, row.label),
-            h('span', { className: 'dstm-perfValue' }, row.value),
-            h(
-              'span',
-              { className: 'dstm-perfTrack' },
-              h('i', { style: { width: Math.max(2, Math.min(100, row.ratio * 100)) + '%', background: row.color } }),
-            ),
-            h('span', { className: 'dstm-perfDetail' }, row.detail),
-          ),
-        ),
-        p.latencySamples === 0
-          ? h('p', { className: 'dstm-hint' }, t('perf.noTiming'))
-          : h(
-              'p',
-              { className: 'dstm-hint' },
-              t('perf.samples') + ' ' + formatInt(p.latencySamples) + ' / ' + formatInt(p.calls || 0),
-            ),
-      );
-    }
-
-    /** Tool activity: volume, failure rate and the busiest tools. */
-    function ToolPanel({ performance, t }) {
-      const tools = (performance && performance.tools) || {};
-      const rows = Array.isArray(tools.byName) ? tools.byName : [];
-      const max = rows.length > 0 ? rows[0].calls : 1;
-      return h(
-        'div',
-        { className: 'dstm-tools' },
-        h(
-          'div',
-          { className: 'dstm-toolSummary' },
-          h(
-            'div',
-            null,
-            h('b', { className: 'dstm-toolBig' }, formatInt(tools.calls || 0)),
-            h('span', { className: 'dstm-toolUnit' }, t('tools.calls')),
-          ),
-          h(
-            'div',
-            null,
-            h('b', { className: 'dstm-toolBig' }, formatMs(tools.avgMs)),
-            h('span', { className: 'dstm-toolUnit' }, t('tools.avgDuration')),
-          ),
-          h(
-            'div',
-            null,
-            h(
-              'b',
-              { className: 'dstm-toolBig' + ((tools.errorRate || 0) > 0.05 ? ' is-bad' : '') },
-              ((tools.errorRate || 0) * 100).toFixed(1) + '%',
-            ),
-            h('span', { className: 'dstm-toolUnit' }, t('tools.errorRate')),
-          ),
-        ),
-        rows.length === 0
-          ? h('div', { className: 'dstm-empty' }, t('tools.empty'))
-          : h(
-              'div',
-              { className: 'dstm-toolList' },
-              rows.slice(0, 8).map((row) =>
-                h(
-                  'div',
-                  { key: row.name, className: 'dstm-toolRow' },
-                  h('span', { className: 'dstm-toolName' }, row.name),
-                  h('span', { className: 'dstm-toolCount' }, formatInt(row.calls)),
-                  h(
-                    'span',
-                    { className: 'dstm-toolTrack' },
-                    h('i', { style: { width: Math.max(2, (row.calls / max) * 100) + '%' } }),
-                  ),
-                ),
-              ),
-            ),
-        h(
-          'p',
-          { className: 'dstm-hint' },
-          t('tools.coverage') + ' ' + ((tools.callsWithToolsRate || 0) * 100).toFixed(0) + '%',
-        ),
-      );
-    }
-
     /**
      * Cost share as a donut, with the ranking beside it.
      *
@@ -1678,7 +1548,10 @@ window.__ModuleLoader__.load({
         --dstm-line-7: #84cc16;
         --dstm-line-8: #ec4899;
       }
-      .dstm-inner { box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 26px 40px; display: flex; flex-direction: column; gap: 14px; }
+      /* The toolbar and this container are siblings, so the flex gap inside it
+         never separates them: the content needs its own top padding or the
+         first row sits flush against the toolbar. */
+      .dstm-inner { box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto; padding: 18px 26px 40px; display: flex; flex-direction: column; gap: 14px; }
 
       /* sticky toolbar keeps the range and actions reachable on a long page */
       .dstm-sticky {
@@ -1717,8 +1590,8 @@ window.__ModuleLoader__.load({
       .dstm-progress { position: relative; flex: 0 1 180px; height: 3px; overflow: hidden; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); }
       .dstm-progressFill { position: absolute; inset: 0 auto 0 0; background: var(--dsw-alias-state-warn-primary); }
 
-      /* headline figures: one bordered band, four aligned columns */
-      .dstm-kpis { display: grid; grid-template-columns: 1.15fr 1.35fr 0.95fr 1fr; border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
+      /* headline figures: one bordered band, five aligned columns */
+      .dstm-kpis { display: grid; grid-template-columns: 1.15fr 1.35fr 0.95fr 1fr 0.95fr; border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
       .dstm-kpi { padding: 15px 18px; border-left: 1px solid var(--dsw-alias-border-l1); min-width: 0; display: flex; flex-direction: column; gap: 3px; justify-content: center; }
       .dstm-kpi:first-child { border-left: 0; }
       .dstm-kpiLabel { font-size: 11.5px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
@@ -1736,7 +1609,6 @@ window.__ModuleLoader__.load({
       .dstm-dot-off { background: var(--dstm-off); }
 
       .dstm-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; align-items: start; }
-      .dstm-splitEven { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
       .dstm-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
       .dstm-card { box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px; background: var(--dsw-alias-bg-layer-1); min-width: 0; display: flex; flex-direction: column; }
@@ -1952,37 +1824,25 @@ window.__ModuleLoader__.load({
       .dstm-lineCursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--dsw-alias-border-l3); pointer-events: none; }
       .dstm-lineDot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); pointer-events: none; }
 
-      /* runtime performance */
-      .dstm-perf { display: flex; flex-direction: column; gap: 11px; }
-      .dstm-perfRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 1px 10px; align-items: baseline; }
-      .dstm-perfLabel { font-size: 12px; color: var(--dsw-alias-label-secondary); }
-      .dstm-perfValue { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
-      .dstm-perfTrack { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; }
-      .dstm-perfTrack i { display: block; height: 100%; border-radius: 2px; }
-      .dstm-perfDetail { grid-column: 1 / -1; font-size: 10.5px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-
-      /* tool usage */
-      .dstm-tools { display: flex; flex-direction: column; gap: 12px; }
-      .dstm-toolSummary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-      .dstm-toolBig { display: block; font-size: 17px; line-height: 1.2; font-weight: 650; font-variant-numeric: tabular-nums; }
-      .dstm-toolBig.is-bad { color: var(--dsw-alias-state-error-primary); }
-      .dstm-toolUnit { display: block; font-size: 10px; color: var(--dsw-alias-label-secondary); }
-      .dstm-toolList { display: flex; flex-direction: column; gap: 6px; }
-      .dstm-toolRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 10px; align-items: center; }
-      .dstm-toolName { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--dsw-font-family); }
-      .dstm-toolCount { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-      .dstm-toolTrack { grid-column: 1 / -1; height: 2px; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; margin-top: -2px; }
-      .dstm-toolTrack i { display: block; height: 100%; border-radius: 2px; background: color-mix(in oklab, var(--dstm-accent) 70%, var(--dsw-alias-bg-layer-2)); }
-
       .dstm-footer { display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
       .dstm-note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
 
+      @media (max-width: 1180px) {
+        /* Five figures stop fitting on one row, so the band folds to three and
+           then two; the borders follow the new column count. */
+        .dstm-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .dstm-kpi:nth-child(3n + 1) { border-left: 0; }
+        .dstm-kpi:nth-child(n + 4) { border-top: 1px solid var(--dsw-alias-border-l1); }
+      }
       @media (max-width: 1080px) {
-        .dstm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .dstm-kpi:nth-child(odd) { border-left: 0; }
-        .dstm-kpi:nth-child(n+3) { border-top: 1px solid var(--dsw-alias-border-l1); }
         .dstm-split { grid-template-columns: minmax(0, 1fr); }
         .dstm-skelRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 900px) {
+        .dstm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dstm-kpi:nth-child(odd) { border-left: 0; }
+        .dstm-kpi:nth-child(even) { border-left: 1px solid var(--dsw-alias-border-l1); }
+        .dstm-kpi:nth-child(n + 3) { border-top: 1px solid var(--dsw-alias-border-l1); }
       }
       @media (max-width: 700px) {
         .dstm-inner, .dstm-stickyInner { padding-left: 14px; padding-right: 14px; }
@@ -2062,6 +1922,10 @@ window.__ModuleLoader__.load({
       const totals = data === null ? null : data.totals;
       const tokenTotal = totals === null ? 0 : totals.tokenTotal;
       const share = (value) => (tokenTotal > 0 ? (value / tokenTotal) * 100 : 0);
+      // Output speed survives the performance card inside the headline row, so
+      // it is read from the same fold the card used to print.
+      const perf = data === null || data.performance === null || data.performance === undefined ? {} : data.performance;
+      const speedValue = typeof perf.tokensPerSecondAvg === 'number' && perf.tokensPerSecondAvg > 0 ? perf.tokensPerSecondAvg : null;
       const span =
         totals === null || !totals.firstCallAt
           ? ''
@@ -2203,6 +2067,24 @@ window.__ModuleLoader__.load({
                       ' · ' + t('kpi.avgCost') + ' ' + formatCny(totals.calls > 0 ? totals.cost / totals.calls : 0),
                   ),
                 ),
+                h(
+                  'div',
+                  { className: 'dstm-kpi' },
+                  h('div', { className: 'dstm-kpiLabel' }, t('kpi.speed')),
+                  h(
+                    'div',
+                    { className: 'dstm-kpiValue' },
+                    speedValue === null ? '—' : speedValue.toFixed(1),
+                    speedValue === null ? null : h('small', null, ' t/s'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'dstm-kpiDetail' },
+                    speedValue === null
+                      ? t('perf.noTiming')
+                      : t('kpi.speedUnit') + ' · ' + t('kpi.speedSamples') + ' ' + formatInt(perf.latencySamples || 0),
+                  ),
+                ),
               )
             : null,
 
@@ -2277,23 +2159,6 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-
-          data !== null
-            ? h(
-                'div',
-                { className: 'dstm-split dstm-splitEven' },
-                h(
-                  Card,
-                  { title: t('perf.title'), subtitle: t('perf.sub') },
-                  h(PerformancePanel, { performance: data.performance, t }),
-                ),
-                h(
-                  Card,
-                  { title: t('tools.title'), subtitle: t('tools.sub') },
-                  h(ToolPanel, { performance: data.performance, t }),
-                ),
-              )
-            : null,
 
           data !== null
             ? h(
