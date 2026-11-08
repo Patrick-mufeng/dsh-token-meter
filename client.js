@@ -1659,6 +1659,10 @@ window.__ModuleLoader__.load({
     const CSS = `
       .dstm-page {
         box-sizing: border-box; height: 100%; min-height: 0; overflow-y: auto; overflow-x: hidden;
+        /* The gap above the sticky toolbar belongs to the page, not to the bar:
+           a padded bar still paints its background against the window edge,
+           which reads as stuck even when its text has room. */
+        padding-top: calc(10px + var(--dsh-frame-top-clearance, 0px));
         background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
         font-family: var(--dsw-font-family);
         --dstm-peak: var(--dsw-static-amber-500);
@@ -1687,9 +1691,12 @@ window.__ModuleLoader__.load({
         backdrop-filter: blur(12px);
         border-bottom: 1px solid var(--dsw-alias-border-l1);
       }
+      /* The gap above the toolbar belongs to the page, not to the bar: a
+         padded bar would still paint its background against the window edge,
+         which reads as stuck even when its text has room. */
       .dstm-stickyInner {
         box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto;
-        padding: calc(24px + var(--dsh-frame-top-clearance, 0px)) 26px 14px max(26px, var(--dsh-frame-leading-clearance, 0px));
+        padding: 18px 26px 14px max(26px, var(--dsh-frame-leading-clearance, 0px));
         display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
       }
       .dstm-headText { display: flex; align-items: center; gap: 10px; min-width: 0; }
