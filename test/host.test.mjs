@@ -17,39 +17,17 @@ const MODULE = new URL('../index.js', import.meta.url).href;
 const PEAK = Date.UTC(2026, 9, 5, 2, 0, 0); // 10:00 Beijing, Monday: peak
 const OFF_PEAK = Date.UTC(2026, 9, 5, 12, 30, 0); // 20:30 Beijing, Monday: off-peak
 
-function assistant(seq, time, usage, model, step) {
+function assistant(seq, time, usage, model) {
   return {
     type: 'assistant/message',
     seq,
     time,
     data: {
       turn: 1,
-      step: step === undefined ? seq : step,
+      step: seq,
       message: { role: 'assistant', source: { kind: 'model', provider: 'deepseek-account', model } },
       stream: [],
       usage,
-    },
-    surfaceOp: 'append',
-  };
-}
-
-function stepStart(seq, time, turn, step) {
-  return { type: 'step/start', seq, time, data: { turn, step }, surfaceOp: 'append' };
-}
-
-function toolCall(seq, time, turn, step, callId, name) {
-  return { type: 'tool/call', seq, time, data: { turn, step, callId, name, arguments: '{}' }, surfaceOp: 'append' };
-}
-
-function toolResult(seq, time, turn, step, callId, text) {
-  return {
-    type: 'tool/result',
-    seq,
-    time,
-    data: {
-      turn,
-      step,
-      message: { role: 'tool', source: { kind: 'tool', callId }, toolCallId: callId, content: [{ type: 'text', text }] },
     },
     surfaceOp: 'append',
   };
@@ -72,12 +50,7 @@ const SESSIONS = [
     inheritedEventCount: 0,
     events: [
       user(0, PEAK, 'first question'),
-      stepStart(1, PEAK - 2000, 1, 1),
-      toolCall(2, PEAK - 1500, 1, 1, 'call_a', 'read'),
-      toolResult(3, PEAK - 1000, 1, 1, 'call_a', 'file contents'),
-      toolCall(4, PEAK - 900, 1, 1, 'call_b', 'grep'),
-      toolResult(5, PEAK - 800, 1, 1, 'call_b', 'Error: no matches'),
-      assistant(6, PEAK, { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 0 }, 'deepseek-flash', 1),
+      assistant(1, PEAK, { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 0 }, 'deepseek-flash'),
       assistant(2, OFF_PEAK, { inputTokens: 500, outputTokens: 100, cacheReadTokens: 1000 }, 'deepseek-flash'),
     ],
   },
@@ -193,11 +166,7 @@ assert.equal(body.totals.output, 750);
 assert.equal(body.totals.cacheRead, 12000);
 assert.equal(body.totals.tokenTotal, 3600 + 750 + 12000);
 assert.equal(body.totals.unpriced, 0);
-// The axis is padded to the calendar: both instants share one Beijing day, and
-// the padded days up to today carry zero usage rather than being absent.
-assert.equal(body.days.filter((day) => day.calls > 0).length, 1, 'exactly one day has calls');
-assert.equal(body.days.every((day, index) => index === 0 || day.date > body.days[index - 1].date), true, 'days are strictly increasing');
-assert.equal(new Set(body.days.map((day) => day.date)).size, body.days.length, 'no duplicate days');
+assert.equal(body.days.length, 1, 'both instants share one Beijing day');
 assert.equal(body.models.length, 2, 'two models');
 assert.equal(body.workspaces.length, 2, 'two workspaces');
 assert.equal(body.sessions[0].id, 's-sub', 'ranking sorts by token total');
@@ -305,189 +274,6 @@ console.log('host.test.mjs: all assertions passed');
   // Every token in the grid also appears in the totals.
   const gridTokens = res.rhythm.reduce((sum, row) => sum + row.reduce((a, b) => a + b, 0), 0);
   assert.ok(Math.abs(gridTokens - res.totals.tokenTotal) < 1e-6, 'rhythm covers every token');
-}
-
-/* ------------------------------------------------- new sessions, warm cache */
-
-{
-  // A profile keeps creating sessions while DSH runs. Once a cache is warm the
-  // panel must still discover them; the scan used to run only when the cache was
-  // empty, so a long-lived process never saw a new session until it restarted.
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-token-meter-grow-'));
-  const saved = process.env.DSH_TOKEN_METER_CACHE;
-  process.env.DSH_TOKEN_METER_CACHE = join(dir, 'sessions.json');
-
-  const { apply: applyFresh } = await import(MODULE + '?grow=' + Date.now());
-  let sessions = [
-    {
-      header: { id: 'grow-old', createdAt: PEAK, cwd: 'D:\work\alpha', isSeeded: false, version: 4 },
-      live: false,
-      inheritedEventCount: 0,
-      events: [assistant(1, PEAK, { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }, 'deepseek-flash')],
-    },
-  ];
-  const routes = new Map();
-  applyFresh({
-    get: (name) => (name === 'sessionQuery'
-      ? { listSessions: async () => sessions, readSession: async (id) => sessions.find((entry) => entry.header.id === id) }
-      : undefined),
-    inject: (_deps, cb) => cb({
-      effect: (fn) => { try { fn(); } catch {} return () => {}; },
-      connection: { fetch: { register: ({ path, fetch }) => { routes.set(path, fetch); return () => {}; } } },
-    }),
-    effect: (fn) => { try { fn(); } catch {} return () => {}; },
-  });
-
-  const read = async (range) => {
-    const res = await routes.get('/api/dsh-token-meter/stats')(new Request('http://local/api/dsh-token-meter/stats?range=' + range + '&n=' + Math.random()));
-    return res.json();
-  };
-  const settle = async (range) => {
-    let body = await read(range);
-    for (let attempt = 0; attempt < 80 && body.phase !== 'ready'; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      body = await read(range);
-    }
-    return body;
-  };
-
-  const before = await settle('all');
-  assert.equal(before.totals.calls, 1, 'warm cache starts with the known session');
-
-  // A session created after the last scan.
-  sessions = sessions.concat([{
-    header: { id: 'grow-new', createdAt: OFF_PEAK, cwd: 'D:\work\alpha', isSeeded: false, version: 4 },
-    live: true,
-    inheritedEventCount: 0,
-    events: [assistant(1, OFF_PEAK, { inputTokens: 200, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 }, 'deepseek-flash')],
-  }]);
-
-  // The listing timer is 20 s; the scan must then pick the session up unaided.
-  await new Promise((resolve) => setTimeout(resolve, 21000));
-  const after = await settle('all');
-  assert.equal(after.totals.calls, 2, 'a session created later is discovered without a restart');
-
-  rmSync(dir, { recursive: true, force: true });
-  process.env.DSH_TOKEN_METER_CACHE = saved;
-}
-
-/* ------------------------------------------- an existing session keeps growing */
-
-{
-  // Today's calls can belong to a session that already existed in the cache.
-  // A warm cache must re-read such a session, not just discover brand new ones.
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-token-meter-grow-'));
-  const saved = process.env.DSH_TOKEN_METER_CACHE;
-  process.env.DSH_TOKEN_METER_CACHE = join(dir, 'sessions.json');
-
-  const { apply: applyGrowing } = await import(MODULE + '?growing=' + Date.now());
-
-  let events = [assistant(1, PEAK, { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }, 'deepseek-flash')];
-  const growing = [{
-    header: { id: 'growing', createdAt: PEAK, cwd: 'D:\work\alpha', isSeeded: false, version: 4 },
-    live: true,
-    inheritedEventCount: 0,
-    get events() { return events; },
-  }];
-
-  const routes = new Map();
-  applyGrowing({
-    get: (name) => (name === 'sessionQuery'
-      ? { listSessions: async () => growing, readSession: async (id) => growing.find((entry) => entry.header.id === id) }
-      : undefined),
-    inject: (_deps, cb) => cb({
-      effect: (fn) => { try { fn(); } catch {} return () => {}; },
-      connection: { fetch: { register: ({ path, fetch }) => { routes.set(path, fetch); return () => {}; } } },
-    }),
-    effect: (fn) => { try { fn(); } catch {} return () => {}; },
-  });
-
-  const read = async () => (await routes.get('/api/dsh-token-meter/stats')(new Request('http://local/api/dsh-token-meter/stats?range=all&n=' + Math.random()))).json();
-  const settle = async () => {
-    let body = await read();
-    for (let attempt = 0; attempt < 80 && body.phase !== 'ready'; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      body = await read();
-    }
-    return body;
-  };
-
-  const before = await settle();
-  assert.equal(before.totals.calls, 1, 'the session starts with one billed call');
-
-  // The same session keeps appending; no new session appears in the listing.
-  events = events.concat([assistant(2, OFF_PEAK, { inputTokens: 900, outputTokens: 90, cacheReadTokens: 0, cacheWriteTokens: 0 }, 'deepseek-flash')]);
-
-  await new Promise((resolve) => setTimeout(resolve, 16000));
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  await read();
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const after = await settle();
-  assert.equal(after.totals.calls, 2, 'an ongoing session picks up its new usage without a restart');
-
-  rmSync(dir, { recursive: true, force: true });
-  process.env.DSH_TOKEN_METER_CACHE = saved;
-}
-
-/* ------------------------------------------------------------ hourly split */
-
-{
-  const res = await call('/api/dsh-token-meter/stats?range=all');
-  assert.equal(res.hours.length, 24, 'all 24 hours are present even when unused');
-
-  for (const row of res.hours) {
-    assert.ok(Math.abs((row.peakCost || 0) + (row.offCost || 0) - (row.cost || 0)) < 1e-9,
-      'hour ' + row.hour + ': peak + off-peak equals the hour total');
-  }
-
-  // The hourly cost split must add up to the same total as the day split.
-  const hourlyCost = res.hours.reduce((sum, row) => sum + (row.cost || 0), 0);
-  assert.ok(Math.abs(hourlyCost - res.totals.cost) < 1e-6, 'hourly cost sums to the range total');
-
-  const hourlyCalls = res.hours.reduce((sum, row) => sum + (row.calls || 0), 0);
-  assert.equal(hourlyCalls, res.totals.calls, 'hourly calls sum to the range total');
-}
-
-/* ------------------------------------------------------------ performance */
-
-{
-  // The fixture sessions have step/start and tool events, so latency, throughput
-  // and the tool rollup must all be populated rather than zeroed.
-  const res = await call('/api/dsh-token-meter/stats?range=all');
-  const perf = res.performance;
-
-  assert.ok(perf !== undefined, 'performance block is present');
-  assert.equal(typeof perf.calls, 'number', 'calls counted');
-  assert.ok(perf.tools !== undefined, 'tool block is present');
-  assert.ok(Array.isArray(perf.tools.byName), 'tool breakdown is an array');
-
-  // Rates must stay within 0..1 whenever the denominator is non-zero.
-  for (const [name, value] of [
-    ['interruptedRate', perf.interruptedRate],
-    ['reasoningShare', perf.reasoningShare],
-    ['tools.errorRate', perf.tools.errorRate],
-    ['tools.callsWithToolsRate', perf.tools.callsWithToolsRate],
-  ]) {
-    assert.equal(value >= 0 && value <= 1, true, name + ' is a ratio (' + value + ')');
-  }
-
-  // The fixture puts a step/start 2 s before its assistant message, so exactly
-  // one call has a measurable latency of 2000 ms.
-  assert.equal(perf.latencySamples, 1, 'one call has a measurable step');
-  assert.equal(Math.round(perf.latencyAvgMs), 2000, 'latency is the step start to message delta');
-  assert.equal(perf.latencyMaxMs, 2000, 'max latency matches the only sample');
-  assert.equal(perf.slowestCall.model, 'deepseek-flash', 'slowest call carries its model');
-
-  // 200 output tokens over 2 s.
-  assert.equal(Math.round(perf.tokensPerSecondAvg), 100, 'throughput is output tokens per second');
-
-  // Two tool calls in the fixture, one of which returned an Error.
-  assert.equal(perf.tools.calls, 2, 'both tool calls counted');
-  assert.equal(perf.tools.errors, 1, 'the text starting with Error counts as a failure');
-  assert.equal(Math.round(perf.tools.errorRate * 100), 50, 'error rate is 1 of 2');
-  assert.equal(perf.tools.callsWithTools, 1, 'one call used tools');
-  assert.equal(Math.round(perf.tools.avgMs), 300, 'tool duration is the call to result delta (500+100)/2');
-  assert.equal(perf.tools.byName.find((tool) => tool.name === 'read').calls >= 1, true, 'tool names are counted');
 }
 
 /* --------------------------------------------------------------- date range */

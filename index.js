@@ -97,57 +97,6 @@ function dayKey(time) {
   return shifted.getUTCFullYear() + '-' + pad(shifted.getUTCMonth() + 1) + '-' + pad(shifted.getUTCDate());
 }
 
-/**
- * Fill the calendar gaps in a day series.
- *
- * `observed` only holds days that had at least one call, which makes the chart's
- * x axis a list of busy days rather than a timeline — two bars a week apart end
- * up adjacent. This inserts zero rows for the days in between so the axis stays
- * linear and a quiet day reads as a real zero.
- *
- * The range bounds are only used to pad the ends for bounded ranges; with
- * `range === 'all'` the series starts at its first real call.
- */
-function fillCalendarDays(observed, since, range) {
-  if (observed.length === 0) return observed;
-  const byDate = new Map(observed.map((row) => [row.date, row]));
-  const empty = (date) => ({
-    date,
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    calls: 0,
-    cost: 0,
-    peakCost: 0,
-    offCost: 0,
-    tokenTotal: 0,
-  });
-
-  const startKey = range === 'all' || since === 0 ? observed[0].date : dayKey(since);
-  const endKey = dayKey(Date.now());
-  // Never walk further than a year, and never past the last real day when the
-  // range is open-ended.
-  const stopKey = endKey < observed[observed.length - 1].date ? observed[observed.length - 1].date : endKey;
-
-  const rows = [];
-  const cursor = new Date(startKey + 'T00:00:00Z');
-  const stop = new Date(stopKey + 'T00:00:00Z');
-  let guard = 0;
-  while (cursor <= stop && guard < 400) {
-    const key = cursor.toISOString().slice(0, 10);
-    rows.push(byDate.get(key) || empty(key));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    guard += 1;
-  }
-  // Days observed before the computed start (possible with an odd clock) are
-  // still included rather than silently dropped.
-  for (const row of observed) {
-    if (!rows.some((candidate) => candidate.date === row.date)) rows.push(row);
-  }
-  return rows.sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
-}
-
 function toCount(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -162,17 +111,6 @@ function firstUserText(data) {
     }
   }
   return null;
-}
-
-/** Concatenated text of a tool result message, or null when it carries none. */
-function toolResultText(data) {
-  const message = data && data.message;
-  const content = message && Array.isArray(message.content) ? message.content : [];
-  let text = '';
-  for (const block of content) {
-    if (block && block.type === 'text' && typeof block.text === 'string') text += block.text;
-  }
-  return text === '' ? null : text;
 }
 
 /** Price one usage record; `cost` is null when the model has no known tier. */
@@ -200,49 +138,11 @@ function extractSession(snapshot, record) {
   let title = null;
   let provider = null;
   let model = null;
-  // A step is one model round-trip; its start time gives latency and time to
-  // first token. Tool events between steps are attributed to the step that
-  // issued them, matching the way the runtime interleaves the log.
-  const stepStartedAt = new Map();
-  const toolStartedAt = new Map();
-  const toolsByName = new Map();
-  let stepTools = 0;
-  let stepToolErrors = 0;
-  let stepToolMs = 0;
-  const flushTools = (call) => {
-    call.toolCalls = stepTools;
-    call.toolErrors = stepToolErrors;
-    call.toolMs = stepToolMs;
-    stepTools = 0;
-    stepToolErrors = 0;
-    stepToolMs = 0;
-  };
   for (let index = start; index < events.length; index += 1) {
     const event = events[index];
     if (!event || typeof event.type !== 'string') continue;
     if (title === null && event.type === 'user/message') {
       title = firstUserText(event.data);
-      continue;
-    }
-    if (event.type === 'step/start') {
-      const key = String(event.data && event.data.turn) + ':' + String(event.data && event.data.step);
-      stepStartedAt.set(key, event.time);
-      continue;
-    }
-    if (event.type === 'tool/call') {
-      stepTools += 1;
-      const callId = event.data && event.data.callId;
-      if (typeof callId === 'string') toolStartedAt.set(callId, event.time);
-      const toolName = event.data && typeof event.data.name === 'string' ? event.data.name : '—';
-      toolsByName.set(toolName, (toolsByName.get(toolName) || 0) + 1);
-      continue;
-    }
-    if (event.type === 'tool/result') {
-      const callId = event.data && (event.data.toolCallId || (event.data.message && event.data.message.toolCallId));
-      const began = typeof callId === 'string' ? toolStartedAt.get(callId) : undefined;
-      if (began !== undefined && event.time >= began) stepToolMs += event.time - began;
-      const text = toolResultText(event.data);
-      if (text !== null && text.trimStart().startsWith('Error')) stepToolErrors += 1;
       continue;
     }
     if (event.type !== 'assistant/message') continue;
@@ -261,10 +161,7 @@ function extractSession(snapshot, record) {
     const reasoning = toCount(usage.reasoningTokens);
     const time = typeof event.time === 'number' ? event.time : header.createdAt || 0;
     const priced = priceRecord(input, output, cacheRead, cacheWrite, callModel, time);
-    const stepKey = String(data.turn) + ':' + String(data.step);
-    const began = stepStartedAt.get(stepKey);
-    const latency = typeof began === 'number' && time >= began ? time - began : null;
-    const call = {
+    calls.push({
       time,
       day: dayKey(time),
       provider: callProvider,
@@ -281,14 +178,7 @@ function extractSession(snapshot, record) {
       peak: priced.peak,
       cost: priced.cost,
       saved: priced.saved,
-      // Wall-clock duration of the step that produced this message, and the
-      // output throughput that follows from it. Null when the log has no
-      // step/start to measure against.
-      latencyMs: latency,
-      tokensPerSecond: latency !== null && latency > 0 ? (output + reasoning) / (latency / 1000) : null,
-    };
-    flushTools(call);
-    calls.push(call);
+    });
   }
   const parentId = header.parentSession === undefined ? null : header.parentSession;
   return {
@@ -305,7 +195,6 @@ function extractSession(snapshot, record) {
     provider,
     model,
     calls,
-    tools: Array.from(toolsByName.entries()).map(([name, count]) => ({ name, count })),
   };
 }
 
@@ -411,30 +300,11 @@ function aggregate(engine, range) {
   // shared bucket shape and these two are the only peak-specific series.
   const dayPeakCost = new Map();
   const dayOffCost = new Map();
-  // Peak/off-peak cost per hour of day, mirroring the per-day split. Used when the
-  // range is a single day, where a daily trend would be one bar wide.
-  const hourPeakCost = new Array(24).fill(0);
-  const hourOffCost = new Array(24).fill(0);
-  const hourCalls = new Array(24).fill(0);
   // Weekday × hour token totals (Monday first) for the usage-rhythm grid.
   const rhythm = Array.from({ length: 7 }, () => new Array(24).fill(0));
   // Per-day usage per model, for the multi-series model trend. Keyed by
   // `provider/model` with the same label the model ranking uses.
   const modelDays = new Map();
-  // Performance accumulators, following the shape ZCode records per call:
-  // latency, throughput, reasoning share, retries/errors and tool activity.
-  const perf = {
-    latencySum: 0, latencyCount: 0, latencyMax: 0,
-    tpsSum: 0, tpsCount: 0,
-    reasoning: 0,
-    calls: 0, interrupted: 0,
-    toolCalls: 0, toolErrors: 0, toolMs: 0,
-    withTools: 0,
-    slowest: null,
-  };
-  // Tool names are only known at the session log level, not in the folded call,
-  // so the per-tool rollup is collected while replaying the events themselves.
-  const toolByName = new Map();
   const sessions = [];
   let scannedSessions = 0;
   let emptySessions = 0;
@@ -463,40 +333,13 @@ function aggregate(engine, range) {
       addUsage(bucket(days, call.day), call);
       addUsage(bucket(models, call.provider === null ? String(call.model) : call.provider + '/' + String(call.model)), call);
       addUsage(bucket(providers, call.provider === null ? '—' : call.provider), call);
-      perf.calls += 1;
-      perf.reasoning += call.reasoning || 0;
-      if (call.interrupted) perf.interrupted += 1;
-      if (typeof call.latencyMs === 'number' && call.latencyMs > 0) {
-        perf.latencySum += call.latencyMs;
-        perf.latencyCount += 1;
-        if (call.latencyMs > perf.latencyMax) perf.latencyMax = call.latencyMs;
-        if (perf.slowest === null || call.latencyMs > perf.slowest.latencyMs) {
-          perf.slowest = { latencyMs: call.latencyMs, model: call.model, time: call.time, session: entry.id, title: entry.title };
-        }
-      }
-      if (typeof call.tokensPerSecond === 'number' && call.tokensPerSecond > 0) {
-        perf.tpsSum += call.tokensPerSecond;
-        perf.tpsCount += 1;
-      }
-      if (call.toolCalls > 0) {
-        perf.withTools += 1;
-        perf.toolCalls += call.toolCalls;
-        perf.toolErrors += call.toolErrors || 0;
-        perf.toolMs += call.toolMs || 0;
-      }
       addUsage(bucket(hours, String(hourOf(call.time))), call);
       addUsage(bucket(peaks, call.peak ? 'peak' : 'off'), call);
       if (call.cost !== null) {
         const costMap = call.peak ? dayPeakCost : dayOffCost;
         costMap.set(call.day, (costMap.get(call.day) || 0) + call.cost);
       }
-      const callHour = hourOf(call.time);
-      rhythm[weekdayOf(call.time)][callHour] += call.input + call.output + call.cacheRead + call.cacheWrite;
-      hourCalls[callHour] += 1;
-      if (call.cost !== null) {
-        if (call.peak) hourPeakCost[callHour] += call.cost;
-        else hourOffCost[callHour] += call.cost;
-      }
+      rhythm[weekdayOf(call.time)][hourOf(call.time)] += call.input + call.output + call.cacheRead + call.cacheWrite;
 
       // Grouped by bare model name: gateways prefix the same model with routing
       // tags (`cn:`, `wb:cn:`, `global:`), so the last colon segment is the model
@@ -561,13 +404,6 @@ function aggregate(engine, range) {
 
     scannedSessions += 1;
     if (entry.subagent) subagentSessions += 1;
-    if (used > 0 && Array.isArray(entry.tools)) {
-      for (const tool of entry.tools) {
-        const row = toolByName.get(tool.name) || { name: tool.name, calls: 0 };
-        row.calls += tool.count;
-        toolByName.set(tool.name, row);
-      }
-    }
     if (used === 0) {
       emptySessions += 1;
       continue;
@@ -625,10 +461,7 @@ function aggregate(engine, range) {
     }))
     .sort((left, right) => right.tokenTotal - left.tokenTotal);
 
-  // Calendar gaps must be visible: a day with no calls is a real zero, not a
-  // missing bar. Filling the axis also keeps the x scale linear in time, which a
-  // sparse series would otherwise distort (10-18 next to 10-21 looks continuous).
-  const observedDays = Array.from(days.values())
+  const dayRows = Array.from(days.values())
     .map((row) => ({
       date: row.key,
       input: row.input,
@@ -642,8 +475,6 @@ function aggregate(engine, range) {
       tokenTotal: row.input + row.output + row.cacheRead + row.cacheWrite,
     }))
     .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
-
-  const dayRows = fillCalendarDays(observedDays, since, range);
 
   // Dense per-model series aligned to `dayRows`, so the Client can plot several
   // models without re-deriving a date axis. The whole list is sent (bounded, a
@@ -708,8 +539,6 @@ function aggregate(engine, range) {
       ...(row === undefined
         ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0, saved: 0, tokenTotal: 0, hitRate: 0 }
         : shape(row)),
-      peakCost: hourPeakCost[hour],
-      offCost: hourOffCost[hour],
     });
   }
 
@@ -753,28 +582,6 @@ function aggregate(engine, range) {
     days: dayRows,
     rhythm,
     modelSeries,
-    performance: {
-      calls: perf.calls,
-      interrupted: perf.interrupted,
-      interruptedRate: perf.calls === 0 ? 0 : perf.interrupted / perf.calls,
-      latencyAvgMs: perf.latencyCount === 0 ? null : perf.latencySum / perf.latencyCount,
-      latencyMaxMs: perf.latencyCount === 0 ? null : perf.latencyMax,
-      latencySamples: perf.latencyCount,
-      tokensPerSecondAvg: perf.tpsCount === 0 ? null : perf.tpsSum / perf.tpsCount,
-      reasoningTokens: perf.reasoning,
-      reasoningShare: tokenTotal === 0 ? 0 : perf.reasoning / tokenTotal,
-      slowestCall: perf.slowest,
-      tools: {
-        calls: perf.toolCalls,
-        errors: perf.toolErrors,
-        errorRate: perf.toolCalls === 0 ? 0 : perf.toolErrors / perf.toolCalls,
-        totalMs: perf.toolMs,
-        avgMs: perf.toolCalls === 0 ? 0 : perf.toolMs / perf.toolCalls,
-        callsWithTools: perf.withTools,
-        callsWithToolsRate: perf.calls === 0 ? 0 : perf.withTools / perf.calls,
-        byName: Array.from(toolByName.values()).sort((left, right) => right.calls - left.calls).slice(0, 14),
-      },
-    },
     models: modelRows,
     providers: providerRows,
     hours: hourRows,
@@ -801,7 +608,6 @@ export function apply(ctx) {
     listingAt: 0,
     scanning: null,
     liveRefreshAt: 0,
-    listingRefreshAt: 0,
     saveTimer: null,
     state: { phase: 'idle', startedAt: 0, finishedAt: 0, scanned: 0, total: 0, failed: 0, error: null },
   };
@@ -881,57 +687,32 @@ export function apply(ctx) {
     saveCache();
   };
 
-  /**
-   * Re-read the sessions that could have grown since their last fold.
-   *
-   * `live` is not reliable enough on its own: a session that was already running
-   * when the cache was written, or one that resumed today, can be folded with
-   * `live: false` and would then never be refreshed. Instead this walks the
-   * sessions with the most recent activity and re-reads them on a timer, which
-   * also picks up a conversation that simply continues in an existing session.
-   */
-  const refreshRecent = async () => {
+  const refreshLive = async () => {
     const now = Date.now();
-    if (now - engine.liveRefreshAt < 15000) return;
+    if (now - engine.liveRefreshAt < 4000) return;
     engine.liveRefreshAt = now;
-
-    const lastAt = (entry) => {
-      const calls = entry.calls;
-      if (calls !== undefined && calls.length > 0) return calls[calls.length - 1].time;
-      return entry.createdAt || 0;
-    };
-
-    const candidates = Array.from(engine.cache.values())
-      .sort((left, right) => lastAt(right) - lastAt(left))
-      .slice(0, 8);
-    if (candidates.length === 0) return;
-
+    const live = [];
+    for (const entry of engine.cache.values()) if (entry.live) live.push(entry);
+    if (live.length === 0) return;
+    // Only the newest few live sessions can have new usage; re-reading every live
+    // agent on each request would multiply the scan cost for no visible gain.
+    live.sort((left, right) => right.createdAt - left.createdAt);
+    const targets = live.slice(0, 4).map((entry) => entry.id);
     let cursor = 0;
-    let changed = false;
     const worker = async () => {
-      while (cursor < candidates.length) {
-        const entry = candidates[cursor];
+      while (cursor < targets.length) {
+        const id = targets[cursor];
         cursor += 1;
         try {
-          const snapshot = await query().readSession(entry.id);
-          const next = extractSession(snapshot, { header: snapshot.session, live: Boolean(entry.live) });
-          const before = entry.calls === undefined ? 0 : entry.calls.length;
-          // Only touch the cache when the number of billed calls changed, so an
-          // idle profile never rewrites its cache file on a timer tick.
-          if (next.calls.length !== before) {
-            engine.cache.set(entry.id, next);
-            changed = true;
-          } else if (next.live !== entry.live) {
-            engine.cache.set(entry.id, { ...entry, live: next.live });
-            changed = true;
-          }
+          const snapshot = await query().readSession(id);
+          engine.cache.set(id, extractSession(snapshot, { header: snapshot.session, live: true }));
         } catch (error) {
-          // A session that vanished keeps its last fold.
+          // A live session that vanished keeps its last fold.
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, worker));
-    if (changed) scheduleSave();
+    await Promise.all(Array.from({ length: Math.min(2, targets.length) }, worker));
+    scheduleSave();
   };
 
   const ensureScan = async (force) => {
@@ -940,15 +721,12 @@ export function apply(ctx) {
     const records = await query().listSessions();
     engine.listing = records;
     engine.listingAt = now;
-    engine.listingRefreshAt = now;
+    const missing = force ? records.slice() : records.filter((record) => !engine.cache.has(String(record.header.id)));
     for (const record of records) {
       const id = String(record.header.id);
       const entry = engine.cache.get(id);
       if (entry !== undefined) entry.live = Boolean(record.live);
     }
-    // New sessions always need a fold. Existing ones are handled by
-    // `refreshRecent`, which re-reads the sessions that could have grown.
-    const missing = force ? records.slice() : records.filter((record) => !engine.cache.has(String(record.header.id)));
     if (missing.length === 0) {
       engine.state.phase = 'ready';
       engine.state.scanned = records.length;
@@ -969,18 +747,11 @@ export function apply(ctx) {
 
   const startIfNeeded = (force) => {
     if (engine.scanning !== null) return;
-    // A warm cache must still pick up sessions created since the last scan.
-    // Re-listing is cheap (it reads session headers, not events), so it happens
-    // on a timer rather than only when the cache is empty; without this a long
-    // running DSH never sees a new session until it restarts.
-    const listingStale = Date.now() - engine.listingRefreshAt > 20000;
-    const needsScan = force || listingStale || engine.cache.size === 0 || engine.state.phase !== 'ready';
-    // Growing sessions are refreshed independently of the listing: an ongoing
-    // conversation appends to a session that already exists and would otherwise
-    // only be re-read after a restart. This runs on every request (throttled
-    // inside) so it is not tied to which branch the listing takes.
-    refreshRecent().catch(() => {});
-    if (!needsScan) return;
+    const needsScan = force || engine.cache.size === 0 || engine.state.phase !== 'ready';
+    if (!needsScan) {
+      refreshLive().catch(() => {});
+      return;
+    }
     // Report the scan synchronously so the panel can show progress from its very
     // first response, even when a warm cache makes the listing the only wait.
     if (engine.state.phase !== 'scanning') {
@@ -994,7 +765,6 @@ export function apply(ctx) {
         error: null,
       };
     }
-    engine.listingRefreshAt = Date.now();
     ensureScan(force).catch((error) => {
       engine.state.phase = 'error';
       engine.state.error = error instanceof Error ? error.message : String(error);
